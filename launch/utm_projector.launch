@@ -1,0 +1,7 @@
+<launch>
+    
+    <node pkg="utm_projector" type="utm_projector_node"    name="utm_projector_node"    output="screen">
+        <param name="navfix_topic" value="/apollo/ros/navsatfix"/>
+    </node>
+
+</launch>
