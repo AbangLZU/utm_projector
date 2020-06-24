@@ -3,15 +3,11 @@
 UtmProjector::UtmProjector(ros::NodeHandle &nh, ros::NodeHandle &private_nh):nh_(nh),
                             private_nh_(private_nh), tf2_listener_(tf2_buffer_)
 {
-    string wgs84 = "+proj=latlong +ellps=WGS84";
-    string proj4_text = "+proj=utm +zone=50 +ellps=WGS84 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs";
-    wgs84pj_source_ = pj_init_plus(wgs84.c_str());
-    utm_target_ = pj_init_plus(proj4_text.c_str());
-
     ROS_INFO_STREAM("init utm projector");
     string navfix_topic = nh.param<string>("navfix_topic", "/apollo/ros/navsatfix");
     navstatfix_sub_ = nh.subscribe(navfix_topic, 100, &UtmProjector::gps_callback, this);
 
+    init_proj_ = false;
 }
 
 UtmProjector::~UtmProjector()
@@ -19,22 +15,28 @@ UtmProjector::~UtmProjector()
 }
 
 void UtmProjector::gps_callback(const sensor_msgs::NavSatFix::ConstPtr & gps_msg){
-    // auto utm_xy = latlon_to_utm_xy(gps_msg->longitude, gps_msg->latitude);
-
-    // double lon_rad = -2.129343746458001;
-    // double lat_rad = 0.6530018835651807;
-    // // UTMCoor utm_xy;
-    // // EXPECT_TRUE(FrameTransform::LatlonToUtmXY(lon_rad, lat_rad, &utm_xy));
-    // // EXPECT_LT(std::fabs(utm_xy.x - 588278.9834174265), 1e-5);
-    // // EXPECT_LT(std::fabs(utm_xy.y - 4141295.255870659), 1e-5);
-
-    // auto utm_xy = latlon_to_utm_xy(lon_rad, lat_rad);
-
-
+    // convert degree to rad
     double x = gps_msg->longitude;
     double y = gps_msg->latitude;
-    x *= DEG_TO_RAD_LOCAL;
-    y *= DEG_TO_RAD_LOCAL;
+    x = x * M_PI / 180.0;
+    y = y * M_PI / 180.0;
+
+    int zone = static_cast<int>((x * RAD_TO_DEG + 180) / 6) + 1;
+
+    if((!init_proj_) || (utm_zone_!=zone)){
+      // init the proj4 source and target
+      string wgs84 = "+proj=latlong +ellps=WGS84";
+      std::ostringstream proj4_text;
+      proj4_text<<"+proj=utm +zone="<<zone<<" +ellps=WGS84 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs";
+
+      ROS_INFO_STREAM("project source: "<<wgs84);
+      ROS_INFO_STREAM("project target: "<<proj4_text.str());
+
+      wgs84pj_source_ = pj_init_plus(wgs84.c_str());
+      utm_target_ = pj_init_plus(proj4_text.str().c_str());
+      utm_zone_ = zone;
+      init_proj_ = true;
+    }
 
     pj_transform(wgs84pj_source_, utm_target_, 1, 1, &x, &y, NULL);
 
@@ -48,39 +50,10 @@ void UtmProjector::gps_callback(const sensor_msgs::NavSatFix::ConstPtr & gps_msg
     output_msg.pose.orientation.z = 0.0;
     output_msg.header = gps_msg->header;
 
-    publish_tf("world", "adam", output_msg);
+    publish_tf("world", "gnss", output_msg);
 }
 
 void UtmProjector::run(){
-}
-
-pair<double, double> UtmProjector::latlon_to_utm_xy(double lon_rad, double lat_rad) {
-  projPJ pj_latlon;
-  projPJ pj_utm;
-  int zone = 0;
-  zone = static_cast<int>((lon_rad * RAD_TO_DEG + 180) / 6) + 1;
-
-  ROS_INFO_STREAM("utm zone is: "<< zone);
-  std::string latlon_src =
-      "+proj=longlat +ellps=WGS84 +towgs84=0,0,0,0,0,0,0 +no_defs";
-  std::ostringstream utm_dst;
-  utm_dst << "+proj=utm +zone=" << 50 << " +ellps=WGS84 +units=m +no_defs";
-  if (!(pj_latlon = pj_init_plus(latlon_src.c_str()))) {
-    return pair<double, double>(0.0, 0.0);
-  }
-  if (!(pj_utm = pj_init_plus(utm_dst.str().c_str()))) {
-    return pair<double, double>(0.0, 0.0);
-  }
-  double longitude = lon_rad;
-  double latitude = lat_rad;
-  pj_transform(pj_latlon, pj_utm, 1, 1, &longitude, &latitude, nullptr);
-  pair<double, double> utm_result;
-  utm_result.first = longitude; // x
-  utm_result.second = latitude; // y
-
-  pj_free(pj_latlon);
-  pj_free(pj_utm);
-  return utm_result;
 }
 
 void UtmProjector::publish_tf(
